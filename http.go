@@ -1,53 +1,62 @@
-package influxdb
+package metrics
 
 import (
-	"fmt"
-	influxClient "github.com/influxdb/influxdb-go"
-	"github.com/matzhouse/go-metrics"
-	"log"
-	"time"
+	"net/http"
+	"runtime"
 )
 
-type Config struct {
-	Host     string
-	Database string
-	Username string
-	Password string
+type sysmetrics struct {
+	goroutines int
+	version    string
 }
 
-func Influxdb(r metrics.Registry, d time.Duration, config *Config) {
-	client, err := influxClient.NewClient(&influxClient.ClientConfig{
-		Host:     config.Host,
-		Database: config.Database,
-		Username: config.Username,
-		Password: config.Password,
-	})
+type httpmetrics struct {
+	metrics []httpmetric
+	system  sysmetrics
+}
+
+type httpmetric struct {
+	Type  string
+	Count int
+	Value string
+}
+
+func Http() {
+
+	port := "127.0.0.1:6007"
+
+	fmt.Println("Starting metrics server on port ", port)
+
+	http.HandleFunc("/", metricshandler)
+	http.ListenAndServe(port, nil)
+
+}
+
+func metricshandler(w http.ResponseWriter, r *http.Request) {
+
+	m := data()
+
+	o, err := json.Marshal(m)
+
 	if err != nil {
-		log.Println(err)
-		return
+		fmt.Fprintf(w, "Error in Marshalling JSON")
+	} else {
+		fmt.Fprintf(w, "%s", o)
 	}
 
-	for _ = range time.Tick(d) {
-		if err := send(r, client); err != nil {
-			log.Println(err)
-		}
-	}
 }
 
-func send(r metrics.Registry, client *influxClient.Client) error {
-	series := []*influxClient.Series{}
+func data() (output httpmetrics) {
+
+	series := *[]httpmetric
 
 	r.Each(func(name string, i interface{}) {
 		now := getCurrentTime()
 		switch metric := i.(type) {
 		case metrics.Counter:
-			series = append(series, &influxClient.Series{
-				Name:    fmt.Sprintf("%s.count", name),
-				Columns: []string{"time", "count"},
-				Points: [][]interface{}{
-					{now, metric.Count()},
-				},
-			})
+
+			series = append(series, &metric{"counter", metric.Count()})
+
 		case metrics.Gauge:
 			series = append(series, &influxClient.Series{
 				Name:    fmt.Sprintf("%s.value", name),
@@ -106,9 +115,22 @@ func send(r metrics.Registry, client *influxClient.Client) error {
 			log.Println(err)
 		}
 	})
-	return nil
+
+	output.metrics = series
+
+	output.system = systemdata()
+
+	return
+
 }
 
-func getCurrentTime() int64 {
-	return time.Now().UnixNano() / 1000000
+func metricdata() (md []httpmetric) {
+
+}
+
+func systemdata() (sd sysmetrics) {
+	sd = sysmetrics{
+		runtime.NumGoroutine(),
+		runtime.Version(),
+	}
 }
